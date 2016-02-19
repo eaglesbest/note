@@ -31,40 +31,40 @@
 
 	注释掉没有用到的服务的检查。通常来说需要注释掉HCatalog、Accumulo检查(除非你准备使用HCatalog，Accumulo等HADOOP上的组件)
 	
-	```
-		##Moved to be a runtime check in sqoop.
-		#if[ ! -d "${HCAT_HOME}" ]; then
-		#  echo "Warning: $HCAT_HOME does notexist! HCatalog jobs will fail."
-		#  echo 'Please set $HCAT_HOME to the root ofyour HCatalog installation.'
-		#fi
-			
-		#if[ ! -d "${ACCUMULO_HOME}" ]; then
-		#  echo "Warning: $ACCUMULO_HOME does notexist! Accumulo imports will fail."
-		#  echo 'Please set $ACCUMULO_HOME to the rootof your Accumulo installation.'
-		#fi
-			
-		#Add HCatalog to dependency list
-		#if[ -e "${HCAT_HOME}/bin/hcat" ]; then
-		# TMP_SQOOP_CLASSPATH=${SQOOP_CLASSPATH}:`${HCAT_HOME}/bin/hcat-classpath`
-		#  if [ -z "${HIVE_CONF_DIR}" ]; then
-		#   TMP_SQOOP_CLASSPATH=${TMP_SQOOP_CLASSPATH}:${HIVE_CONF_DIR}
-		#  fi
-		#  SQOOP_CLASSPATH=${TMP_SQOOP_CLASSPATH}
-		#fi
-			
-		#Add Accumulo to dependency list
-		#if[ -e "$ACCUMULO_HOME/bin/accumulo" ]; then
-		#  for jn in `$ACCUMULO_HOME/bin/accumuloclasspath | grep file:.*accumulo.*jar |cut -d':' -f2`; do
-		#    SQOOP_CLASSPATH=$SQOOP_CLASSPATH:$jn
-		#  done
-		#  for jn in `$ACCUMULO_HOME/bin/accumuloclasspath | grep file:.*zookeeper.*jar |cut -d':' -f2`; do
-		#    SQOOP_CLASSPATH=$SQOOP_CLASSPATH:$jn
-		#  done
-		#fi
-		
-		# export HCAT_HOME=
-		# export ACCUMULO_HOME=
-	```
+```
+##Moved to be a runtime check in sqoop.
+#if[ ! -d "${HCAT_HOME}" ]; then
+#  echo "Warning: $HCAT_HOME does notexist! HCatalog jobs will fail."
+#  echo 'Please set $HCAT_HOME to the root ofyour HCatalog installation.'
+#fi
+	
+#if[ ! -d "${ACCUMULO_HOME}" ]; then
+#  echo "Warning: $ACCUMULO_HOME does notexist! Accumulo imports will fail."
+#  echo 'Please set $ACCUMULO_HOME to the rootof your Accumulo installation.'
+#fi
+	
+#Add HCatalog to dependency list
+#if[ -e "${HCAT_HOME}/bin/hcat" ]; then
+# TMP_SQOOP_CLASSPATH=${SQOOP_CLASSPATH}:`${HCAT_HOME}/bin/hcat-classpath`
+#  if [ -z "${HIVE_CONF_DIR}" ]; then
+#   TMP_SQOOP_CLASSPATH=${TMP_SQOOP_CLASSPATH}:${HIVE_CONF_DIR}
+#  fi
+#  SQOOP_CLASSPATH=${TMP_SQOOP_CLASSPATH}
+#fi
+	
+#Add Accumulo to dependency list
+#if[ -e "$ACCUMULO_HOME/bin/accumulo" ]; then
+#  for jn in `$ACCUMULO_HOME/bin/accumuloclasspath | grep file:.*accumulo.*jar |cut -d':' -f2`; do
+#    SQOOP_CLASSPATH=$SQOOP_CLASSPATH:$jn
+#  done
+#  for jn in `$ACCUMULO_HOME/bin/accumuloclasspath | grep file:.*zookeeper.*jar |cut -d':' -f2`; do
+#    SQOOP_CLASSPATH=$SQOOP_CLASSPATH:$jn
+#  done
+#fi
+	
+# export HCAT_HOME=
+# export ACCUMULO_HOME=
+```
 	这里注释的可能不完全，请仔细检查。如果没有注释干净，可能在数据库连接的时候，出现无法获取系统语言变量值的异常。
   	 		
 
