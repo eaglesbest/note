@@ -1,0 +1,518 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>Apache HBase Internals: Locking and Multiversion Concurrency Control : Apache HBase</title>
+               <link rel="EditURI"   type="application/rsd+xml" title="RSD" href="https://blogs.apache.org/hbase/rsd"/>
+        
+            <link rel="alternate" type="application/atom+xml" title="Recent Entries (Atom)"  href="https://blogs.apache.org/hbase/feed/entries/atom" />
+    <link rel="alternate" type="application/rss+xml"  title="Recent Entries (RSS)"   href="https://blogs.apache.org/hbase/feed/entries/rss" />
+    <link rel="alternate" type="application/atom+xml" title="Recent Comments (Atom)" href="https://blogs.apache.org/hbase/feed/comments/atom" />
+    <link rel="alternate" type="application/rss+xml"  title="Recent Comments (RSS)"  href="https://blogs.apache.org/hbase/feed/comments/rss" />
+
+    
+                <link rel="search"
+            title="OpenSearch Descriptor for Apache Software Foundation Blogs"
+            type="application/opensearchdescription+xml"
+            href="https://blogs.apache.org/roller-services/opensearch" />
+        <link rel="stylesheet" type="text/css" media="all" href="/hbase/page/asf-custom.css">
+</head>
+<body>
+<div class="navigation">
+		<ul>
+			<li><a href="http://apache.org/foundation" title="About the Foundation">Foundation</a></li>
+			<li><a href="http://projects.apache.org" title="Apache Projects">Projects</a></li>
+
+			<li><a href="http://people.apache.org" title="Apache People">People</a></li>
+			<li><a href="http://apache.org/foundation/getinvolved.html" title="Get involved in Apache">Get Involved</a></li>
+			<li><a href="http://apache.org/foundation/sponsorship.html" title="Support the mission of Apache">Support Apache</a></li>			
+			<li><a href="http://planet.apache.org" title="Committers and Projects feeds">Planet Apache</a></li>
+		</ul>
+	</div>
+      <div id="header">
+                          <h1>The Apache Software Foundation<br />
+  <span class="alt"><small>Blogging in Action.</small></span></h1>
+<!-- template:./apache-tomcat-6.0.18/webapps/ROOT/themes/asf/permalink.vm -->
+<!-- template:./themes/asf/permalink.vm -->
+
+<br /><br />
+<hr class="grey" />
+               </div>
+<div class="content_wrapper">
+  <div class="content">
+    <h1 class="weblogName">Apache HBase</h1>
+
+                <div class="next-previous">
+                                        &laquo; <a href="https://blogs.apache.org/hbase/entry/hbase_project_management_committee_meeting">HBase Project Manage...</a> |  
+                <a href="/hbase/">Main</a>
+                | <a href="https://blogs.apache.org/hbase/entry/hbase_who_needs_a_master">HBase - Who needs a...</a> &raquo;
+            </div>
+
+                            <div class="dayBox">
+
+    <div class="dayTitle">
+       Friday Jan 11, 2013
+    </div>
+
+        <div class="entryBox">
+        <a name="apache_hbase_internals_locking_and" id="apache_hbase_internals_locking_and"></a>
+        <p class="entryTitle">Apache HBase Internals: Locking and Multiversion Concurrency Control</p>
+        <p class="entryContent">
+                            <p>by Gregory Chanan</p> 
+  <p>HBase Committer</p> 
+  <p>Cloudera, Inc.&nbsp;</p><b id="internal-source-marker_0.08475310145877302" style="font-family:Times;font-size:medium;font-weight:normal;"> 
+    <p><b id="internal-source-marker_0.08475310145877302" style="font-weight:normal;"> </b></p> 
+    <p><b id="internal-source-marker_0.08475310145877302" style="font-weight:normal;"> </b></p> 
+    <p> </p> 
+    <p><b id="internal-source-marker_0.08475310145877302" style="font-weight:normal;"> </b></p> 
+    <p><b id="internal-source-marker_0.08475310145877302" style="font-weight:normal;"> </b></p> 
+    <p> </p> 
+    <p><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">NOTE: This blog post describes how Apache HBase does concurrency control. &nbsp;This assumes knowledge of the HBase write path, which you can read more about in this other </span><a href="http://blog.cloudera.com/blog/2012/06/hbase-write-path/"><span style="font-size:16px;font-family:Arial;color:#1155cc;background-color:transparent;text-decoration:underline;vertical-align:baseline;white-space:pre-wrap;">blog post</span></a><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">.</span><br></p> 
+    <h2><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">Introduction</span></h2><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">Apache HBase provides a consistent and understandable data model to the user while still offering high performance. &nbsp;In this blog, we’ll first discuss the guarantees of the HBase data model and how they differ from those of a traditional database. &nbsp;Next, we’ll motivate the need for concurrency control by studying concurrent writes and then introduce a simple concurrency control solution. &nbsp;Finally, we’ll study read/write concurrency control and discuss an efficient solution called Multiversion Concurrency Control.</span><br> 
+    <h2><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">Why Concurrency Control?</span></h2><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">In order to understand HBase concurrency control, we first need to understand why HBase needs concurrency control at all; in other words, what properties does HBase guarantee about the data that requires concurrency control?</span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;"></span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">The answer is that HBase guarantees </span><a href="http://hbase.apache.org/acid-semantics.html"><span style="font-size:16px;font-family:Arial;color:#1155cc;background-color:transparent;text-decoration:underline;vertical-align:baseline;white-space:pre-wrap;">ACID semantics per-row</span></a><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">. &nbsp;ACID is an acronym for:</span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">• Atomicity: All parts of transaction complete or none complete</span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">• Consistency: Only valid data written to database</span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">• Isolation: Parallel transactions do not impact each other’s execution</span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">• Durability: Once transaction committed, it remains</span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;"></span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">If you have experience with traditional relational databases, these terms may be familiar to you. &nbsp;Traditional relational databases typically provide ACID semantics across all the data in the database; for performance reasons, HBase only provides ACID semantics on a per-row basis. &nbsp;If you are not familiar with these terms, don’t worry. &nbsp;Instead of dwelling on the precise definitions, let’s look at a couple of examples.</span><br> 
+    <h2><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">Writes and Write-Write Synchronization</span></h2> 
+    <p><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">Consider two concurrent writes to HBase that represent {company, role} combinations I’ve held:</span></p></b> 
+  <p><b id="internal-source-marker_0.08475310145877302" style="font-family:Times;font-size:medium;font-weight:normal;"><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;"></span><img src="https://lh3.googleusercontent.com/GUfEmjQwv1Hhxjy7HTvGj0O1PlSTp5VFeWfOYp11bUf-flrikcnGp8fiO9SFuI7QgXgF_URPoEItJOCDaz6T3WEnL1UBVAFTfUWRg9d5WW_RYZkD7kU" width="367" height="49"></b></p> 
+  <p><b id="internal-source-marker_0.08475310145877302" style="font-family:Times;font-size:medium;font-weight:normal;"><img src="https://lh3.googleusercontent.com/nHYvqo7wPLaruPN59aS5GKW2v4VvuYwDKVzBj9kmn3nuHNL9-ceV2-mBsyYx9dDtBNnBqT3-UHCoxNiNSjxLxJuywTdTEZFPCmF_ggecGNANGh_DqEo" width="366" height="52"><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;"></span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;font-style:italic;vertical-align:baseline;white-space:pre-wrap;">Image 1. &nbsp;Two writes to the same row</span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;"></span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">From the previously cited </span><a href="http://blog.cloudera.com/blog/2012/06/hbase-write-path/"><span style="font-size:16px;font-family:Arial;color:#1155cc;background-color:transparent;text-decoration:underline;vertical-align:baseline;white-space:pre-wrap;">Write Path Blog Post</span></a><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">, we know that HBase will perform the following steps for each write:</span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;"></span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">(1) Write to Write-Ahead-Log (WAL)</span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">(2) Update MemStore: write each data cell [the (row, column) pair] to the memstore</span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;font-style:italic;vertical-align:baseline;white-space:pre-wrap;">List 1. Simple list of write steps</span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;font-style:italic;vertical-align:baseline;white-space:pre-wrap;"></span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">That is, we write to the WAL for disaster recovery purposes and then update an in-memory copy (MemStore) of the data.</span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;"></span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">Now, assume we have no concurrency control over the writes and consider the following order of events:</span></b></p> 
+  <p><b id="internal-source-marker_0.08475310145877302" style="font-family:Times;font-size:medium;font-weight:normal;"><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;"></span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;"></span><img src="https://lh3.googleusercontent.com/PMdvgepglgMgcpN9xyTcUEsXgrzzOtAWgsQeK9MzvRZdogdHxDEit2wPxbJmtFUmWzWVJm6Dn2PUCwCK0RWzLvrJD33Bk0WyJfeBXtLXNKNDNWGzwwM" width="440" height="183"><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;"></span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;font-style:italic;vertical-align:baseline;white-space:pre-wrap;">Image 2. &nbsp;One possible order of events for two writes</span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;"></span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">At the end, we are left with the following state:</span></b></p> 
+  <p><b id="internal-source-marker_0.08475310145877302" style="font-family:Times;font-size:medium;font-weight:normal;"> </b></p>
+  <p><b id="internal-source-marker_0.08475310145877302" style="font-family:Times;font-size:medium;font-weight:normal;"><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;"></span><img src="https://lh6.googleusercontent.com/yerLZ-l1ZTpszN2xZ0HCX-nAhu_FrtoxeoMcMBti65yeeGdLFxMYEK7LjIITzuYOGmv9n0Z_EhCH8yGzdNwnygIocLg9Qm_hYbIYTfSRx0dWDzE0wFI" width="370" height="47"><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;"></span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;font-style:italic;vertical-align:baseline;white-space:pre-wrap;">Image 3. &nbsp;Inconsistent result in absence of write-write synchronization</span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;"></span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">which is a role I’ve never held. &nbsp;In ACID terms, we have not provided Isolation for the writes, as the two writes became intermixed.</span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;"></span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">We clearly need some concurrency control. &nbsp;The simplest solution is to provide exclusive locks per row in order to provide isolation for writes that update the same row. &nbsp;So, our new list of steps for writes is as follows (new steps are in </span><span style="font-size:16px;font-family:Arial;color:#0000ff;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">blue</span><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">).</span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;"></span><br><span style="font-size:16px;font-family:Arial;color:#0000ff;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">(0) Obtain Row Lock</span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">(1) Write to Write-Ahead-Log (WAL)</span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">(2) Update MemStore: write each cell to the memstore</span><br><span style="font-size:16px;font-family:Arial;color:#0000ff;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">(3) Release Row Lock</span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;font-style:italic;vertical-align:baseline;white-space:pre-wrap;">List 2: List of write-steps with write-write synchronization</span><br></b></p><b id="internal-source-marker_0.08475310145877302" style="font-family:Times;font-size:medium;font-weight:normal;"> 
+    <h2><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">Read-Write Synchronization</span></h2> 
+    <p><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">So far, we’ve added row locks to writes in order to guarantee ACID semantics. &nbsp;Do we need to add any concurrency control for reads? &nbsp;Let’s consider another order of events for our example above (Note that this order follows the rules in </span><span style="font-size:16px;font-family:Arial;background-color:transparent;font-style:italic;vertical-align:baseline;white-space:pre-wrap;">List 2</span><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">):</span><img src="https://lh6.googleusercontent.com/jI-EcZXDkq7ZMDA3bM8lWLIXrsm1-q4zaXPnz8t2cE6tR0R17-Aj5VnCVAyQ5xufXVwpjNIz_FqL-X0S_IG7qd0JFtgacInyJzmrBa_VB1mBVwwiaus" width="701" height="266"><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;"></span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;font-style:italic;vertical-align:baseline;white-space:pre-wrap;">Image 4. &nbsp;One possible order of operations for two writes and a read</span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;"></span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">Assume no concurrency control for reads and that we request a read concurrently with the two writes. &nbsp;Assume the read is executed directly before “Waiter” is written to the MemStore; this read action is represented by a red line above. &nbsp;In that case, we will again read the inconsistent row:</span></p> 
+    <p><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;"></span><img src="https://lh6.googleusercontent.com/XY72zlyBu8hBe6KUD0p9N69vs5GTkz8MM-UERTUyZ5D-LqgF1DjZYYkIT-zrrNRr_s3sszy42lUxYZakHZQDY7g2ilo8BzTa2Kpn60J9rH_d-ivXUmw" width="370" height="47"><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;"></span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;font-style:italic;vertical-align:baseline;white-space:pre-wrap;">Image 5. &nbsp;Inconsistent result in absence of read-write synchronization</span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;"></span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">Therefore, we need some concurrency control to deal with read-write synchronization. &nbsp;The simplest solution would be to have the reads obtain and release the row locks in the same manner as the writes. &nbsp;This would resolve the ACID violation, but the downside is that our reads and writes would both contend for the row locks, slowing each other down.</span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;"></span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">Instead, HBase uses a form of </span><a href="http://en.wikipedia.org/wiki/Multiversion_concurrency_control"><span style="font-size:16px;font-family:Arial;color:#1155cc;background-color:transparent;text-decoration:underline;vertical-align:baseline;white-space:pre-wrap;">Multiversion Concurrency Control</span></a><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;"> (MVCC) to avoid requiring the reads to obtain row locks. &nbsp;Multiversion Concurrency Control works in HBase as follows:</span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;"></span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">For writes:</span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">(w1) After acquiring the RowLock, each write operation is immediately assigned a write number</span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">(w2) Each data cell in the write stores its write number.</span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">(w3) A write operation completes by declaring it is finished with the write number.</span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;"></span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">For reads:</span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">(r1) &nbsp;Each read operation is first assigned a read timestamp, called a read point.</span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">(r2) &nbsp;The read point is assigned to be the highest integer such that all writes with write number &lt;= x have been completed.</span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">(r3) &nbsp;A read r for a certain (row, column) combination returns the data cell with the matching (row, column) whose write number is the largest value that is less than or equal to the read point of r.</span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;font-style:italic;vertical-align:baseline;white-space:pre-wrap;">List 3. Multiversion Concurrency Control steps</span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;font-style:italic;vertical-align:baseline;white-space:pre-wrap;"></span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">Let’s look at the operations in Image 4 again, this time using MultiVersion Concurrency Control:</span><img src="https://lh5.googleusercontent.com/A6EN_3BVfrJNbKbJ6wn1oXDCMC0vVS4amwReogt53yLqyDQdS8xSkyX52DeErFVAHBv32k3L6QcuCTt6frheXEFTayYP5d9dmOFKryMIuQgH17Fs1yE" width="721" height="278"><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;"></span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;font-style:italic;vertical-align:baseline;white-space:pre-wrap;">Image 6. &nbsp;Write steps with Multiversion Concurrency Control</span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;"></span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">Notice the new steps introduced for Multiversion Concurrency Control. &nbsp;Each write is assigned a write number (step w1), each data cell is written to the memstore with its write number (step w2, e.g. “Cloudera [wn=1]”) and each write completes by finishing its write number (step w3).</span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;"></span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">Now, let’s consider the read in Image 4, i.e. a read that begins after step “Restaurant [wn=2]” but before the step “Waiter [wn=2]”. &nbsp;From rule r1 and r2, its read point will be assigned to 1. &nbsp;From r3, it will read the values with write number of 1, leaving us with:</span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;"></span><img src="https://lh6.googleusercontent.com/K-TazzgR93UGmPRXPHpLXp0NOVthbhaE54eqjKaon0L9gsQKTUEIIRPq_A8okDmTlk_nsCa9vjh30LLx7TvhL8sbvBEvI55oCBPJ4u0qE-IrtAziyL9e" width="367" height="49"><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;"></span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;font-style:italic;vertical-align:baseline;white-space:pre-wrap;">Image 7. &nbsp;Consistent answer with Multiversion Concurrency Control</span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;"></span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">A consistent response without requiring locking the row for the reads!</span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;"></span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">Let’s put this all together by listing the steps for a write with Multiversion Concurrency Control: (new steps required for read-write synchronization are in red):</span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">(0) Obtain Row Lock</span><br><span style="font-size:16px;font-family:Arial;color:#ff0000;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">(0a) Acquire New Write Number</span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">(1) Write to Write-Ahead-Log (WAL)</span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">(2) Update MemStore: write each cell to the memstore</span><br><span style="font-size:16px;font-family:Arial;color:#ff0000;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">(2a) Finish Write Number</span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">(3) Release Row Lock</span><br></p> 
+    <h2><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">Conclusion</span></h2><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">In this blog we first defined HBase’s row-level ACID guarantees. &nbsp;We then demonstrated the need for concurrency control by studying concurrent writes and introduced a row-level locking solution. &nbsp;Finally, we investigated read-write concurrency control and presented an efficient mechanism called Multiversion Concurrency Control (MVCC).</span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;"></span><br><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;">This blog post is accurate as of HBase 0.92. &nbsp;HBase 0.94 has various optimizations, e.g. </span><a href="https://issues.apache.org/jira/browse/HBASE-5541"><span style="font-size:16px;font-family:Arial;color:#1155cc;background-color:transparent;text-decoration:underline;vertical-align:baseline;white-space:pre-wrap;">HBASE-5541</span></a><span style="font-size:16px;font-family:Arial;background-color:transparent;vertical-align:baseline;white-space:pre-wrap;"> that will be described in a future blog post.</span></b>
+  <p>&nbsp;</p>
+                    </p>
+        <p class="entryInfo">
+            Posted at <a href="https://blogs.apache.org/hbase/entry/apache_hbase_internals_locking_and">12:38AM Jan 11, 2013</a>
+            by stack in <span class="category">General</span> &nbsp;|&nbsp;
+                                        <a href="https://blogs.apache.org/hbase/entry/apache_hbase_internals_locking_and#comments" class="commentsLink">Comments[5]</a>
+                        
+            &nbsp;|&nbsp;
+            <a href="http://www.facebook.com/sharer.php?u=https://blogs.apache.org/hbase/entry/apache_hbase_internals_locking_and" target="_blank" title="Share on Facebook"><img src="/images/facebook_icon.png"></a>
+            <a href="http://twitter.com/home?status=Apache+HBase+Internals%3A+Locking+and+Multiversion+Concurrency+Control%20https%3A%2F%2Fblogs.apache.org%2Fhbase%2Fentry%2Fapache_hbase_internals_locking_and" target="_blank" title="Share on Twitter"><img src="/images/twitter_icon.png"></a>
+
+        </p>
+            </div>
+    
+</div>
+    
+                    <a name="comments"></a>
+    <div class="comments" id="comments">
+
+            <div class="comments-head">Comments:</div>
+            
+    <br/>
+                        <a name="comment-1360908170000" id="comment-1360908170000"></a>
+            <div class="comment odd" id="comment1">
+
+                Nice Explanation..
+I am currently using HBase 0.94, As you said if there is no locking it will show as Restaurant-&gt;Engineer. In HBase0.94 they are using operation wise locking because of this again there is a chance of occuring Restaurant-&gt;engineer. 
+As far my understanding from your blog, the entire row will be locked until it fully inserts all the values.
+In HBase 0.94 since operation level locking the same above problem may occur right....
+
+
+                <p class="comment-details">
+                Posted by
+                                    <b>Rohit</b>
+                
+                on February 15, 2013 at 06:02 AM GMT+00:00
+
+                <a href="https://blogs.apache.org/hbase/entry/apache_hbase_internals_locking_and#comment-1360908170000"
+                   class="entrypermalink" title="comment permalink">#</a>
+                </p>
+
+            </div>
+
+                                <a name="comment-1360910428000" id="comment-1360910428000"></a>
+            <div class="comment even" id="comment2">
+
+                Consider this program, 
+
+Put p=new Put(/*rowkey*/);
+p.add(....,'cloudera');
+Put p1=new Put(/*rowkey*/);
+p1.add(...,'Restaurant');
+p1.add(....,'Waiter');
+table.put(p1);
+p.add(.....,'Engineer');
+table.put(p);
+
+We get the lock for p at  the following step
+Put p=new Put(/*rowkey*/)
+
+because we hold the lock on the row key no other is allowed to get the lock.
+but in the case of HBase 0.94 it's not happening like that...Is there anything wrong in my understanding...Can you help me in this..
+
+                <p class="comment-details">
+                Posted by
+                                    <b>Rohit</b>
+                
+                on February 15, 2013 at 06:40 AM GMT+00:00
+
+                <a href="https://blogs.apache.org/hbase/entry/apache_hbase_internals_locking_and#comment-1360910428000"
+                   class="entrypermalink" title="comment permalink">#</a>
+                </p>
+
+            </div>
+
+                                <a name="comment-1423298105000" id="comment-1423298105000"></a>
+            <div class="comment odd" id="comment3">
+
+                Awesome write up, nicely explained :)
+
+                <p class="comment-details">
+                Posted by
+                                    <b>Amit Kabra</b>
+                
+                on February 07, 2015 at 08:35 AM GMT+00:00
+
+                <a href="https://blogs.apache.org/hbase/entry/apache_hbase_internals_locking_and#comment-1423298105000"
+                   class="entrypermalink" title="comment permalink">#</a>
+                </p>
+
+            </div>
+
+                                <a name="comment-1437138234000" id="comment-1437138234000"></a>
+            <div class="comment even" id="comment4">
+
+                Very impressive article for each other.
+Thanks a lot...
+
+                <p class="comment-details">
+                Posted by
+                                    <a rel="nofollow" href="http://smartmiltoys.com/kidkraft-dollhouse"><b>Smartmiltoys</b></a>
+                
+                on July 17, 2015 at 01:03 PM GMT+00:00
+
+                <a href="https://blogs.apache.org/hbase/entry/apache_hbase_internals_locking_and#comment-1437138234000"
+                   class="entrypermalink" title="comment permalink">#</a>
+                </p>
+
+            </div>
+
+                                <a name="comment-1440235034000" id="comment-1440235034000"></a>
+            <div class="comment odd" id="comment5">
+
+                Nice article !
+I have also worked around this MVCC theory and created one good post for this. 
+Please visit this url. 
+<a href="http://www.dbrnd.com/2015/05/what-is-mvcc-multi-version-concurrency-control/" rel="nofollow">http://www.dbrnd.com/2015/05/what-is-mvcc-multi-version-concurrency-control/</a>
+
+                <p class="comment-details">
+                Posted by
+                                    <a rel="nofollow" href="http://dbrnd.com"><b>Anvesh Patel</b></a>
+                
+                on August 22, 2015 at 09:17 AM GMT+00:00
+
+                <a href="https://blogs.apache.org/hbase/entry/apache_hbase_internals_locking_and#comment-1440235034000"
+                   class="entrypermalink" title="comment permalink">#</a>
+                </p>
+
+            </div>
+
+                </div>
+        
+    <div class="comments-form">
+    <div class="comments-head">Post a Comment:</div>
+    <a name="comment-form"></a>
+
+
+    
+    <form method="post" action="https://blogs.apache.org/hbase/entry/apache_hbase_internals_locking_and" focus="name" 
+        name="commentForm" onsubmit="fixURL(this); return validateComments(this)">    
+        <input type="hidden" name="method" value="post" />
+
+        <ul>
+            <li>
+                <label class="desc">Name:</label>
+                <input type="text" name="name" class="text large" value="" size="50" maxlength="255" />
+            </li>
+
+            <li><label class="desc">E-Mail:</label>
+                <input type="text" name="email" class="text large" value="" size="50" maxlength="255" />
+            </li>
+
+            <li><label class="desc">URL:</label>
+                <input type="text" name="url" class="text large" value="" size="50" maxlength="255" />
+            </li>
+
+                    <li><input type="checkbox" class="checkbox" id="notify" name="notify" />
+                <label for="notify" class="choice">Notify me by email of new comments</label>
+            </li>
+                    <li>
+                <input type="checkbox" class="checkbox" id="rememberInfo" name="rememberInfo" />
+                <label for="rememberInfo" class="choice">Remember Information?</label>
+            </li>
+            <li>
+                <label class="desc">Your Comment:</label>
+             
+            <textarea name="content" class="textarea large" cols="40" rows="10"></textarea>
+
+            </li>
+            <li class="info">
+                <span class="comments-syntax-indicator">
+                HTML Syntax:
+                                    <span class="disabled">NOT allowed</span>
+                                </span>
+            </li>
+            <li class="info">
+               <script type="text/javascript" src="/theme/scripts/clientSideInclude.js"></script>
+               <div id="commentAuthenticator"></div>
+            </li>
+            <li>
+               <input type="button" class="button" name="post" value="&nbsp;Preview&nbsp;"
+                  onclick="this.form.method.value='preview';this.form.submit()" />
+               <input type="submit" class="button" name="post" value="&nbsp;Post&nbsp;" />
+            </li>
+        </ul>
+
+    </form>
+
+    <script type="text/javascript" src="/theme/scripts/roller.js"></script>
+    <script type="text/javascript">
+    /* <![CDATA[ */
+    clientSideInclude('commentAuthenticator', '/CommentAuthenticatorServlet');
+
+    var author = getCookie("commentAuthor");
+    var email = getCookie("commentEmail");
+    var url = getCookie("commentUrl");
+    // check each field - IE will render "null"
+    if (author) {
+        document.forms['commentForm'].name.value = author;
+    }
+    if (email) {
+        document.forms['commentForm'].email.value = email;
+    }
+    if (url) {
+        document.forms['commentForm'].url.value = url;
+    }
+
+    if (author || email || url) {
+        document.forms['commentForm'].rememberInfo.checked = true;
+    }
+
+    function fixURL(theForm) {
+        if (theForm.url.value != "" &&
+            theForm.url.value.indexOf("http://") == -1) { //prepend http://
+            theForm.url.value = "http://"+theForm.url.value;
+        }
+        saveUserInformation(theForm);
+    }
+
+    function saveUserInformation(theForm) {
+        if (theForm.rememberInfo.checked) {
+            rememberUser(theForm);
+        } else {
+            forgetUser(theForm);
+        }
+    }
+
+    function validateComments(theForm) {
+        if (theForm.content.value == "") {
+            alert("Please enter a comment.");
+            theForm.content.focus();
+            return false;
+        }
+    }
+    /* ]]> */
+    </script>
+
+
+    </div>
+
+  </div>
+</div>
+
+<div class="rightbar_wrapper">
+  <div class="rightbar">
+               
+    <h2>Calendar</h2>
+    <div class="sidebar">
+    <table cellspacing="0" border="0"  summary="Blog Archive Calendar" class="hCalendarTable"><tr><td colspan="7" align="center" class="hCalendarMonthYearRow"><a href="/hbase/date/201512" title="Prev" class="hCalendarNavBar">&laquo;</a> April 2016</td></tr><tr><th class="hCalendarDayNameRow" align="center">Sun</th><th class="hCalendarDayNameRow" align="center">Mon</th><th class="hCalendarDayNameRow" align="center">Tue</th><th class="hCalendarDayNameRow" align="center">Wed</th><th class="hCalendarDayNameRow" align="center">Thu</th><th class="hCalendarDayNameRow" align="center">Fri</th><th class="hCalendarDayNameRow" align="center">Sat</th></tr><tr><td class="hCalendarDayNotInMonth">&nbsp;</td><td class="hCalendarDayNotInMonth">&nbsp;</td><td class="hCalendarDayNotInMonth">&nbsp;</td><td class="hCalendarDayNotInMonth">&nbsp;</td><td class="hCalendarDayNotInMonth">&nbsp;</td><td class="hCalendarDay"><div class="hCalendarDayTitle">1</div></td><td class="hCalendarDay"><div class="hCalendarDayTitle">2</div></td></tr><tr><td class="hCalendarDay"><div class="hCalendarDayTitle">3</div></td><td class="hCalendarDay"><div class="hCalendarDayTitle">4</div></td><td class="hCalendarDay"><div class="hCalendarDayTitle">5</div></td><td class="hCalendarDayCurrent"><div class="hCalendarDayTitle">6</div></td><td class="hCalendarDay"><div class="hCalendarDayTitle">7</div></td><td class="hCalendarDay"><div class="hCalendarDayTitle">8</div></td><td class="hCalendarDay"><div class="hCalendarDayTitle">9</div></td></tr><tr><td class="hCalendarDay"><div class="hCalendarDayTitle">10</div></td><td class="hCalendarDay"><div class="hCalendarDayTitle">11</div></td><td class="hCalendarDay"><div class="hCalendarDayTitle">12</div></td><td class="hCalendarDay"><div class="hCalendarDayTitle">13</div></td><td class="hCalendarDay"><div class="hCalendarDayTitle">14</div></td><td class="hCalendarDay"><div class="hCalendarDayTitle">15</div></td><td class="hCalendarDay"><div class="hCalendarDayTitle">16</div></td></tr><tr><td class="hCalendarDay"><div class="hCalendarDayTitle">17</div></td><td class="hCalendarDay"><div class="hCalendarDayTitle">18</div></td><td class="hCalendarDay"><div class="hCalendarDayTitle">19</div></td><td class="hCalendarDay"><div class="hCalendarDayTitle">20</div></td><td class="hCalendarDay"><div class="hCalendarDayTitle">21</div></td><td class="hCalendarDay"><div class="hCalendarDayTitle">22</div></td><td class="hCalendarDay"><div class="hCalendarDayTitle">23</div></td></tr><tr><td class="hCalendarDay"><div class="hCalendarDayTitle">24</div></td><td class="hCalendarDay"><div class="hCalendarDayTitle">25</div></td><td class="hCalendarDay"><div class="hCalendarDayTitle">26</div></td><td class="hCalendarDay"><div class="hCalendarDayTitle">27</div></td><td class="hCalendarDay"><div class="hCalendarDayTitle">28</div></td><td class="hCalendarDay"><div class="hCalendarDayTitle">29</div></td><td class="hCalendarDay"><div class="hCalendarDayTitle">30</div></td></tr><tr><td class="hCalendarDayNotInMonth">&nbsp;</td><td class="hCalendarDayNotInMonth">&nbsp;</td><td class="hCalendarDayNotInMonth">&nbsp;</td><td class="hCalendarDayNotInMonth">&nbsp;</td><td class="hCalendarDayNotInMonth">&nbsp;</td><td class="hCalendarDayNotInMonth">&nbsp;</td><td class="hCalendarDayNotInMonth">&nbsp;</td></tr><tr class="hCalendarNextPrev"><td colspan="7" align="center"><a href="/hbase/" class="hCalendarNavBar">Today</a></td></tr></table>
+    </div>
+
+    <h2>Search</h2>
+    <div class="sidebar">
+        <form id="searchForm" method="get" action="/hbase/search"
+        style="margin: 0; padding: 0" onsubmit="return validateSearch(this)">
+        <p>
+          <input type="text" id="q" name="q" size="10" class="text small"
+              maxlength="255" value="" />
+                    <input type="submit" class="button" value="Search" id="searchbutton" />
+        </p>
+    </form>
+    <script type="text/javascript">
+        function validateSearch(form) {
+            if (form.q.value == "") {
+                alert("Please enter a search term to continue.");
+                form.q.focus();
+                return false;
+            }
+            return true;
+        }
+    </script>
+    </div>
+
+    <h2>Hot Blogs (today's hits)</h2>
+    <div class="sidebar">
+    <div class="hotblogs">
+        <ul>
+            </ul>
+    </div>
+    </div>
+
+    <h2>Tag Cloud</h2>
+    <div class="sidebar">
+                   <a class="tag s1" href="https://blogs.apache.org/hbase/tags/0.98" title="2">
+         0.98
+       </a>
+            <a class="tag s1" href="https://blogs.apache.org/hbase/tags/1.0" title="1">
+         1.0
+       </a>
+            <a class="tag s1" href="https://blogs.apache.org/hbase/tags/2015" title="1">
+         2015
+       </a>
+            <a class="tag s5" href="https://blogs.apache.org/hbase/tags/apache" title="21">
+         apache
+       </a>
+            <a class="tag s1" href="https://blogs.apache.org/hbase/tags/assignment" title="1">
+         assignment
+       </a>
+            <a class="tag s1" href="https://blogs.apache.org/hbase/tags/base" title="1">
+         base
+       </a>
+            <a class="tag s1" href="https://blogs.apache.org/hbase/tags/blockcache" title="1">
+         blockcache
+       </a>
+            <a class="tag s1" href="https://blogs.apache.org/hbase/tags/checksums" title="1">
+         checksums
+       </a>
+            <a class="tag s1" href="https://blogs.apache.org/hbase/tags/client" title="1">
+         client
+       </a>
+            <a class="tag s1" href="https://blogs.apache.org/hbase/tags/conference" title="2">
+         conference
+       </a>
+            <a class="tag s1" href="https://blogs.apache.org/hbase/tags/crc" title="1">
+         crc
+       </a>
+            <a class="tag s1" href="https://blogs.apache.org/hbase/tags/hadoop" title="2">
+         hadoop
+       </a>
+            <a class="tag s5" href="https://blogs.apache.org/hbase/tags/hbase" title="38">
+         hbase
+       </a>
+            <a class="tag s1" href="https://blogs.apache.org/hbase/tags/jam" title="1">
+         jam
+       </a>
+            <a class="tag s4" href="https://blogs.apache.org/hbase/tags/jvm" title="19">
+         jvm
+       </a>
+            <a class="tag s1" href="https://blogs.apache.org/hbase/tags/mapreduce" title="1">
+         mapreduce
+       </a>
+            <a class="tag s1" href="https://blogs.apache.org/hbase/tags/native" title="1">
+         native
+       </a>
+            <a class="tag s5" href="https://blogs.apache.org/hbase/tags/offheap" title="21">
+         offheap
+       </a>
+            <a class="tag s1" href="https://blogs.apache.org/hbase/tags/part2of2" title="1">
+         part2of2
+       </a>
+            <a class="tag s1" href="https://blogs.apache.org/hbase/tags/phoenix" title="2">
+         phoenix
+       </a>
+            <a class="tag s1" href="https://blogs.apache.org/hbase/tags/queue" title="1">
+         queue
+       </a>
+            <a class="tag s1" href="https://blogs.apache.org/hbase/tags/realtime" title="1">
+         realtime
+       </a>
+            <a class="tag s1" href="https://blogs.apache.org/hbase/tags/release" title="2">
+         release
+       </a>
+            <a class="tag s1" href="https://blogs.apache.org/hbase/tags/scalabilty" title="1">
+         scalabilty
+       </a>
+            <a class="tag s1" href="https://blogs.apache.org/hbase/tags/scanning" title="1">
+         scanning
+       </a>
+            <a class="tag s1" href="https://blogs.apache.org/hbase/tags/sql" title="2">
+         sql
+       </a>
+            <a class="tag s1" href="https://blogs.apache.org/hbase/tags/throttling" title="1">
+         throttling
+       </a>
+            <a class="tag s1" href="https://blogs.apache.org/hbase/tags/timeouts" title="1">
+         timeouts
+       </a>
+            <a class="tag s1" href="https://blogs.apache.org/hbase/tags/transactions" title="1">
+         transactions
+       </a>
+            <a class="tag s1" href="https://blogs.apache.org/hbase/tags/zookeeper" title="1">
+         zookeeper
+       </a>
+         </div>
+
+    <h2> Categories</h2>
+    <div class="sidebar">
+                                <ul class="rCategory">
+                    <li><a href="https://blogs.apache.org/hbase/">All</a></li>
+                                            <li><a href="https://blogs.apache.org/hbase/category/Music">Music</a></li>
+                                                <li class="selected"><a href="https://blogs.apache.org/hbase/category/General">General</a></li>
+                                                <li><a href="https://blogs.apache.org/hbase/category/Status">Status</a></li>
+                            </ul>
+        </div>
+
+    <h2>Feeds</h2>
+    <div class="sidebar">
+        <ul class="rFeeds">
+    <li><a href="https://blogs.apache.org/hbase/feed/entries/atom">All</a></li>
+                <li><a href="https://blogs.apache.org/hbase/feed/entries/atom?cat=%2FMusic">/Music</a></li>
+            <li><a href="https://blogs.apache.org/hbase/feed/entries/atom?cat=%2FGeneral">/General</a></li>
+            <li><a href="https://blogs.apache.org/hbase/feed/entries/atom?cat=%2FStatus">/Status</a></li>
+        <li><a href="https://blogs.apache.org/hbase/feed/comments/atom">Comments</a></li>
+    </ul>
+    </div>
+
+    <h2>Links</h2>
+    <div class="sidebar">
+        <ul class="rFolder">
+                    <li class="rFolderItem">
+                                <a href="http://roller.apache.org"
+               title=""
+               class="rBookmark0">Apache Roller Project</a>
+                </li>
+            <li class="rFolderItem">
+                                <a href="http://apache.org"
+               title=""
+               class="rBookmark0">Apache Software Foundation</a>
+                </li>
+                    </ul>
+    </div>
+
+    <h2>Navigation</h2>
+    <div class="sidebar">
+        <ul class="rNavigationBar">
+        <li class="rNavItem">
+            <a href="/"><span>ASF Blogs</span></a>
+        </li>
+        <li class="rNavItem">
+            <a href="https://blogs.apache.org/hbase/"><span>Weblog</span></a>
+        </li>
+                                                                                                                                                                                        <li class="rNavItem">
+                    <a href="/roller-ui/login-redirect.rol"><span>Login</span></a>
+                </li>
+                        </ul>
+      
+    
+    </div>
+
+      </div>
+</div>
+
+</body>
+</html>
+
