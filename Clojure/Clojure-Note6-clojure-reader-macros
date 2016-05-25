@@ -1,0 +1,18 @@
+## Clojure的读取器宏
+
+读取器负责读入Clojure的形势（Forms），并将其从文件转化为Clojure的数据结构。
+
+## 常用的读取器宏
+
+| 读取器宏 |  示例 |
+| ------:|:-----:|
+| 匿名函数 | `#(.toUpperCase %)`|
+| 注释 | `; single-line comment`
+| 解引用(Deref)| `@form => (deref form)`|
+| 元数据 | `^metadata form`|
+| 引述 | `'form => (quote form)` |
+| 正则表达式 | `#"foo" => a java.util.regex.Pattern`
+| 语法引述 | `'x`
+| 解引述 | `~`|
+| 解引述拼接 | `~@` |
+| 变量引述 | `#'x => (var x)` | 
