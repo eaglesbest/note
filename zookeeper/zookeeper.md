@@ -78,9 +78,65 @@ Zookeeper集群包含了Leader、Follower、Observer等三种角色。Zookeeper�
 
 ### 核心原理
 
+Zookeeper的核心是ZAB协议。ZAB协议可以认为是一个简化版本的Paxos算法，虽然ZAB协议的设计者极力否认ZAB是一种Paxos方案。
+
+#### ZAB协议中的角色
+
+  + Leader： 负责所有事物请求的协调处理，为了保证并发时和全局唯一的事物编号，设计为一个。
+  + Follower：参与投标和Leader选举，并且处理非事物性请求，路由转发事物请求给Leader
+  + Observer：和Follower非常相似，但是不参与Leader选举和投标。
+
 #### ZAB协议
 
-#### FastLeaderElection算法
+ZAB协议中，所有事物请求必须由一个全局的服务器来协调处理，这样的服务器被称为Leader，而余下的其他服务器则成为Follower服务器。Leader服务器负责将一个客户端事物请求转换成一个事物Proposal（提议），并将该Proposal分发给集群中所有的Fllower服务器。之后Leader服务器需要等待所有Follower服务器的反馈，一旦超过半数的Follower服务器进行了正确的反馈后，那么Leader就会再次向所有的Follower服务器分发Commit消息，要求其将前一个Proposal进行提交。
+
++ 两模式
+
+  ZAB协议包含崩溃恢复和消息广播两种模式：
+  
+  + 崩溃恢复模式：
+  
+	  当整个服务框架在启动过程中，或者当Leader服务器出现网络中断、崩溃退出与重启等异常情况时，ZAB协议就会进入恢复模式，在此模式中选举产生新的Leader。当选举产生了新的Leader服务器，同时集群中已经有过半的机器与Leader服务器完成了状态同步之后，ZAB协议就会退出恢复模式。
+	  
+   + 消息广播模式：
+   
+   当集群中已经有过半的Follower服务器完成了和leader服务器状态同步，那么整个服务框架就会进入消息广播模式了。
+
++ 三阶段
+
+ ZAB协议主要细分为发现、同步、广播等三个阶段。发现阶段主要是Leader选举的过程；同步阶段是在Leader选举成功之后，各个Follower与Leader同步数据的过程；广播阶段是在过半的Follower与Leader同步完状态后，Leader接受客户端事务请求进行处理的过程。
+ 
+ + 发现阶段
+   
+     1. Follower F将自己的最后接受的事务Proposal的epoch值发给准Leader L。准Leader是 F的最后事务的事务编号的机器的编号。
+     2. 准Leader们接受Follower发来的epoch消息，当准Leader L接受到过半的epoch消息后，L会生成newEpoch消息发给这些过半的Follower。newEpouch=max(epouch)+1
+     3. 当Follower收到来自准Leader L的newEpouch消息后，进行检验：如果Fllower F的epoch < newEpouch，将epoch设置newEpoch，并且向Leader L发送Ack消息。
+     4. 当Leader L收到来自过半的Follower的Ack消息之后，Leader L机会从这些过半的Follower中选出事务编号最大的一个，作为事务的初始化集合I[e]。
+
+
+  + 同步阶段:
+   	
+   	   在完成发现阶段之后，就进入同步阶段。
+   		
+	 1. Leader L会将新的newEpoch值和新的事务集合I[e]以消息的形式发给Quorum中所有的Follower。
+	 2. 当Follower F接受到来自Leader L的消息之后，F会校验自己当前最大的事务epoch值是否和L发来的newEpoch值相等，如果相等则利用L发来的初始化事务集合I[e]初始化F的事务集合，初始化成功后向Leader发送ack消息；如果F的epoch值和L发来的newEpoch不相等，说明该Follower尚未处于同步阶段，Follower继续下一轮循环。
+	 3. 当Leader接受到过半的Follower针对newEpoch和I[e]的反馈消息后，将会向所有的Follower发送Commit消息。
+	 4. 当Follower收到来自Leader的Commit消息后，就会依次处理并提交所有在I[e’]未处理的事务。
+
+ 
+ + 广播阶段
+
+     1. Leader L接受到客户端新的事务请求后，会生成对应的事务Proposal，并且根据ZXID的顺序向所有的Follower发送提案<e’,<v,z>>，其中epoch(z) = e’
+     2. Follower根据消息接受的先后顺序来处理这些来自Leader的事务Proposal，并将它们追加到h[f]中去，之后反馈给Leader。
+     3. 当Leader接受到过半的Follower针对事务Proposal<e’,<v,z>>的Ack消息后，机会发送Commit<e’,<v,z>>消息给所有的Follower，要求它们进行事务提交。
+     4. 当Follower F接受到来自Leader的Commit<e’,<v,z>>消息后，就会开始提交事务Proposal<e’,<v,z>>。
+     
+     注意：此时该Follower F必定已经提交了事务<v’,z’> ，其中<v’,z’> 属于h(f)，z’ <= z
+
+
 
 
 ### 使用场景
+
+1. 分布式协调器。 对于分布式服务，Master/Slaver模式的设计方案中，经常需要保证Master节点的高可用，热备在节点崩溃时快速切换，这种方案是Zookeeper使用最多的场景。比如Hadoop的nameNode的HA，HBase的HMaster的HA.
+2. 发布/订阅。Zookeeper的数据模式是由ZNode组成的树形结构，对于一个ZNode的子节点，当这个ZNode节点状态发生改变的时候，可以向其子节点发送消息。因此可以完成发布订阅的功能。
